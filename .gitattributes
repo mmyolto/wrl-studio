@@ -1,0 +1,5 @@
+# Normalise line endings in the repository; Windows scripts keep CRLF so they run in cmd.exe.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.png binary
+*.ico binary

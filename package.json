@@ -1,0 +1,35 @@
+{
+  "name": "wantok-radio-light-studio",
+  "private": true,
+  "version": "2.1.0",
+  "description": "Staff studio app for Wantok Radio Light 93.9 FM (PNG Christian Broadcasting Network): listener records, show prep, tasks, pledges & gifts.",
+  "author": "Melvin Yolto",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "deploy": "npm run build && firebase deploy",
+    "deploy:rules": "firebase deploy --only firestore:rules"
+  },
+  "dependencies": {
+    "firebase": "^11.10.0",
+    "jspdf": "^4.2.1",
+    "lucide-react": "0.487.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.1.12",
+    "@types/react": "18.3.18",
+    "@types/react-dom": "18.3.5",
+    "@vitejs/plugin-react": "4.7.0",
+    "tailwindcss": "4.1.12",
+    "typescript": "5.7.3",
+    "vite": "6.3.5"
+  }
+}

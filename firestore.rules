@@ -1,0 +1,252 @@
+rules_version = '2';
+
+// Wantok Radio Light Studio — Firestore security rules.
+// Every permission the app shows in the UI is enforced here as well.
+// Deploy with:  firebase deploy --only firestore:rules
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- helpers ----------
+    function signedIn() {
+      return request.auth != null;
+    }
+    function profilePath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+    function me() {
+      return get(profilePath(request.auth.uid)).data;
+    }
+    function active() {
+      return signedIn()
+        && exists(profilePath(request.auth.uid))
+        && me().get('disabled', false) != true;
+    }
+    function hasRole(roles) {
+      return active() && me().role in roles;
+    }
+    function isAdmin() {
+      return hasRole(['Administrator']);
+    }
+    function isManagement() {
+      return hasRole(['Administrator', 'General Manager', 'Program Director']);
+    }
+    function changedKeys() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+    function setupPath() {
+      return /databases/$(database)/documents/meta/setup;
+    }
+
+    // ---------- rules version ----------
+    // The app reads rulesVersion/<its version> on start. If these rules are older than the app,
+    // the read is refused and the app tells staff to run DEPLOY-RULES.bat.
+    // Keep this in step with RULES_VERSION in src/lib/rulesCheck.ts.
+    match /rulesVersion/{version} {
+      allow get: if version == '2026-10-07';
+    }
+
+    // ---------- first-run setup ----------
+    // The very first account becomes the Administrator. Once meta/setup exists
+    // this path is closed forever.
+    match /meta/setup {
+      allow read: if true;
+      allow create: if signedIn()
+        && !exists(setupPath())
+        && getAfter(profilePath(request.auth.uid)).data.role == 'Administrator';
+      allow update, delete: if false;
+    }
+
+    // ---------- staff profiles ----------
+    match /users/{uid} {
+      allow read: if active() || (signedIn() && request.auth.uid == uid);
+
+      allow create: if isAdmin()
+        || (signedIn()
+            && request.auth.uid == uid
+            && !exists(setupPath())
+            && existsAfter(setupPath())
+            && request.resource.data.role == 'Administrator');
+
+      // Admins manage everyone (but cannot lock themselves out);
+      // staff may only change their own availability / last sign-in.
+      allow update: if (isAdmin()
+            && (request.auth.uid != uid
+                || (request.resource.data.role == 'Administrator'
+                    && request.resource.data.get('disabled', false) != true)))
+        || (active()
+            && request.auth.uid == uid
+            && changedKeys().hasOnly(['availability', 'returnDate', 'availabilityUpdatedAt', 'lastSignIn']));
+
+      allow delete: if isAdmin() && request.auth.uid != uid;
+    }
+
+    // ---------- listener records ----------
+    match /records/{id} {
+      function staffViewer() {
+        return hasRole(['Administrator', 'General Manager', 'Program Director', 'Ministry Chaplain']);
+      }
+      function owns() {
+        return resource.data.createdBy == request.auth.uid;
+      }
+      function canRead() {
+        return staffViewer()
+          || (active() && (owns() || resource.data.referredTo == request.auth.uid));
+      }
+      function workflowOnly() {
+        return changedKeys().hasOnly([
+          'flaggedForPrayer', 'flaggedBy', 'flaggedByName', 'flaggedAt',
+          'referredTo', 'referredToName', 'referredBy', 'referredByName', 'referredAt',
+          'referralStatus', 'referralCompletedAt',
+          'salvationStatus', 'salvationFollowUpBy', 'salvationFollowUpByName', 'salvationFollowUpAt',
+          'updatedAt'
+        ]);
+      }
+
+      allow read: if canRead();
+
+      // Admins may also re-create a record when restoring it from the archive.
+      allow create: if isAdmin()
+        || (hasRole(['Program Director', 'Ministry Chaplain', 'Announcer'])
+            && request.resource.data.createdBy == request.auth.uid);
+
+      allow update: if canRead() && (
+          workflowOnly()
+          || ((hasRole(['Administrator', 'Ministry Chaplain', 'Program Director']) || owns())
+              && request.resource.data.createdBy == resource.data.createdBy)
+        );
+
+      allow delete: if hasRole(['Administrator', 'Program Director']) || (active() && owns());
+    }
+
+    // ---------- archive of edited / deleted records ----------
+    match /archive/{id} {
+      allow read, delete: if isAdmin();
+      allow create: if active() && request.resource.data.archivedBy == request.auth.uid;
+      allow update: if false;
+    }
+
+    // ---------- in-app notifications ----------
+    match /notifications/{id} {
+      allow read, delete: if active() && resource.data.recipientId == request.auth.uid;
+      allow create: if active() && request.resource.data.senderId == request.auth.uid;
+      allow update: if active()
+        && resource.data.recipientId == request.auth.uid
+        && changedKeys().hasOnly(['read']);
+    }
+
+    // ---------- weekly show prep ----------
+    match /showPreps/{id} {
+      function submitter() {
+        return active() && resource.data.submittedBy == request.auth.uid;
+      }
+      function reviewed() {
+        return 'reviewedAt' in resource.data;
+      }
+
+      allow read: if isManagement() || submitter();
+
+      allow create: if hasRole(['Announcer', 'Program Director', 'Administrator'])
+        && request.resource.data.submittedBy == request.auth.uid;
+
+      allow update: if (isManagement()
+            && changedKeys().hasOnly(['reviewedBy', 'reviewedByName', 'reviewedAt', 'reviewNote']))
+        || (submitter()
+            && !reviewed()
+            && request.resource.data.submittedBy == request.auth.uid
+            && !changedKeys().hasAny(['reviewedBy', 'reviewedByName', 'reviewedAt', 'reviewNote', 'createdAt']));
+
+      allow delete: if isAdmin() || (submitter() && !reviewed());
+    }
+
+    // ---------- issue tickets ----------
+    match /tickets/{id} {
+      allow read: if isManagement() || (active() && resource.data.submittedBy == request.auth.uid);
+      allow create: if active()
+        && request.resource.data.submittedBy == request.auth.uid
+        && request.resource.data.status == 'open';
+      allow update: if isManagement();
+      allow delete: if isAdmin();
+    }
+
+    // ---------- tasks assigned to individual staff ----------
+    match /tasks/{id} {
+      function assigner() {
+        return active() && resource.data.assignedBy == request.auth.uid;
+      }
+      function assignee() {
+        return active() && resource.data.assignedTo == request.auth.uid;
+      }
+
+      allow read: if hasRole(['Administrator', 'General Manager'])
+        || (active() && (resource.data.assignedTo == request.auth.uid
+                         || resource.data.assignedBy == request.auth.uid));
+
+      allow create: if hasRole(['Administrator', 'General Manager', 'Program Director', 'Ministry Chaplain'])
+        && request.resource.data.assignedBy == request.auth.uid
+        && request.resource.data.status == 'todo';
+
+      // The person who assigned it (or an Administrator) can change anything except who assigned it;
+      // the assignee can only move the status along and add notes.
+      allow update: if ((assigner() || isAdmin())
+            && !changedKeys().hasAny(['assignedBy', 'assignedByName', 'assignedByRole', 'createdAt']))
+        || (assignee() && changedKeys().hasOnly(['status', 'completedAt', 'updates', 'updatedAt']));
+
+      allow delete: if assigner() || isAdmin();
+    }
+
+    // ---------- days when national / organisational programmes replace show prep ----------
+    match /scheduleChanges/{id} {
+      function reporter() {
+        return active() && resource.data.createdBy == request.auth.uid;
+      }
+      // Everyone sees them so the whole team knows the schedule is changing.
+      allow read: if active();
+
+      allow create: if hasRole(['Administrator', 'General Manager', 'Program Director', 'Announcer'])
+        && request.resource.data.createdBy == request.auth.uid;
+
+      // The reporter (or an Administrator) can correct the details;
+      // management can mark it as noted.
+      allow update: if ((reporter() || isAdmin())
+            && !changedKeys().hasAny(['createdBy', 'createdByName', 'createdByRole', 'createdAt',
+                                      'acknowledgedBy', 'acknowledgedNames']))
+        || (isManagement() && changedKeys().hasOnly(['acknowledgedBy', 'acknowledgedNames']));
+
+      allow delete: if reporter() || isAdmin();
+    }
+
+    // ---------- Shareathon pledges, cash and in-kind gifts ----------
+    // Reference numbers (WRL26 - 0001…) come from a per-year counter that can only
+    // move up by exactly one; the app claims the next number in a transaction.
+    match /counters/{counterId} {
+      allow read: if active();
+      allow create: if active() && request.resource.data.keys().hasOnly(['seq']) && request.resource.data.seq == 1;
+      allow update: if active()
+        && request.resource.data.keys().hasOnly(['seq'])
+        && request.resource.data.seq == resource.data.seq + 1;
+      allow delete: if false;
+    }
+
+    match /gifts/{id} {
+      function managesGiving() {
+        return hasRole(['Administrator', 'General Manager', 'Program Director']);
+      }
+      function recorder() {
+        return active() && resource.data.createdBy == request.auth.uid;
+      }
+
+      allow read: if managesGiving() || recorder();
+
+      // The reference number itself is claimed from the counter inside a transaction in the app.
+      allow create: if active()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.seq is int
+        && request.resource.data.refNo is string;
+
+      allow update: if (managesGiving() || recorder())
+        && !changedKeys().hasAny(['refNo', 'seq', 'year', 'createdBy', 'createdByName', 'createdByRole', 'createdAt']);
+
+      allow delete: if isAdmin();
+    }
+  }
+}
