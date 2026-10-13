@@ -21,6 +21,7 @@ offline support.
 | `SETUP-AND-RUN.bat` | First time: installs packages and Firebase tools, signs in to Firebase, publishes the database rules, starts the app |
 | `START-APP.bat` | Every day: starts the app at <http://localhost:5173> |
 | `DEPLOY-RULES.bat` | After an update: publishes the latest `firestore.rules` to Firebase |
+| `PUBLISH-APP.bat` | Puts the app online at <https://wrl-studio.web.app> for the whole team (run again after every update) |
 | `PUSH-TO-GITHUB.bat` | Uploads the project to your GitHub repository (and later, any changes) |
 
 ## Setting up from a fresh copy (e.g. cloned from GitHub)
@@ -33,9 +34,10 @@ Requires **Node.js 20+**.
    * **Firestore Database** → create in **production mode**, location close to PNG
      (e.g. `australia-southeast1`).
    * **Project settings** → *Your apps* → add a **Web app** and copy its config values.
-2. **Add your Firebase config** — copy `src/lib/firebase-config.example.ts` to
-   `src/lib/firebase-config.ts` and paste the values in. (Or use a `.env` file — see `.env.example`.)
-   Both are git-ignored, so your project's keys never go to GitHub.
+2. **Firebase config** — the Wantok Radio Light project (`wrl-studio`) is built into
+   `src/lib/config.ts`, so a fresh copy works straight away. For a different Firebase project, copy
+   `src/lib/firebase-config.example.ts` to `src/lib/firebase-config.ts` (git-ignored) or use a `.env`
+   file (see `.env.example`).
 3. **Point the tools at your project** — `.firebaserc` holds the project id (`wrl-studio`); change it if
    yours differs.
 4. Install, publish the rules and run:
